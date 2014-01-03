@@ -45,6 +45,11 @@ eWoof = "woof: unparsed input"
 commit :: (MonadError m, Alternative m) => Error m -> m a -> m a
 commit e m = m <|> throwError e
 
+cut :: String -> Parser Char a -> Parser Char a
+cut msg p = do
+  pos <- getState
+  commit (msg, pos) p
+
 -- a type class that toggles
 class Switch f where
   switch :: f a -> f ()
@@ -60,15 +65,18 @@ instance (Functor m, Switch m) => Switch (StateT s m) where
   switch (StateT f) = StateT g
     where g s = fmap (const ((), s)) . switch $ f s
 
-not1 :: (MonadState [t] m, Alternative m, Switch m) => m a -> m t
+-- not1 :: (MonadState [t] m, Alternative m, Switch m) => m a -> m t
+not1 :: Parser Char Char -> Parser Char Char
 not1 p = switch p *> item
 
 -- filter input by predicate
-satisfy :: (MonadState [t] m, Alternative m) => (t -> Bool) -> m t
+-- satisfy :: (MonadState [t] m, Alternative m) => (t -> Bool) -> m t
+satisfy :: (Char -> Bool) -> Parser Char Char
 satisfy = flip check item
 
 -- a parser that takes single legal token
-literal :: (MonadState [t] m, Alternative m, Eq t) => t -> m t
+-- literal :: (MonadState [t] m, Alternative m, Eq t) => t -> m t
+literal :: Char -> Parser Char Char
 literal c = satisfy (==c)
 
 -- tokenizer
@@ -89,33 +97,33 @@ symbol = tok $ some char
 
 application = do
   openparen
-  op <- commit eAppOper form
+  op <- cut eAppOper form
   args <- many form
-  commit eAppClose closeparen
+  cut eAppClose closeparen
   return $ AApp op args
-
-special = opencurly
-          *> commit eSpecial (define <|> lambda)
-          <* commit eSpecClose closecurly
 
 define = check (=="define") symbol
          *> pure ADefine
-         <*> commit eDefSym symbol
-         <*> commit eDefForm form
+         <*> cut eDefSym symbol
+         <*> cut eDefForm form
 
 lambda = do
   check (=="lambda") symbol
-  commit eLamParam opencurly
+  cut eLamParam opencurly
   params <- many symbol
-  -- commit eLamDupe (check distinct params)
-  if distinct params then return () else throwError eLamDupe
-  commit eLamPClose closecurly
-  bodies <- commit eLamBody (some form)
+  -- cut eLamDupe (check distinct params)
+  if distinct params then return () else cut eLamDupe empty
+  cut eLamPClose closecurly
+  bodies <- cut eLamBody (some form)
   return $ ALambda params bodies
+
+special = opencurly
+          *> cut eSpecial (define <|> lambda)
+          <* cut eSpecClose closecurly
 
 form = fmap ASymbol symbol <|> special <|> application
 
 endcheck = switch item
-woof = junk *> (many form) <* commit eWoof endcheck
+woof = junk *> (many form) <* cut eWoof endcheck
 
 distinct xs = length xs == length (nub xs)
