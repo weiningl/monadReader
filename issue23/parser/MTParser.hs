@@ -5,8 +5,12 @@ module MTParser where
 
 import Control.Applicative
 import Control.Monad.State
+import Control.Monad.Trans.Maybe
+import MonadError
 
-type Parser t a = StateT [t] Maybe a
+type Parser e t a = StateT [t] (MaybeT (Either e)) a
+
+
 
 -- take the first token from input, if any
 item :: (MonadState [t] m, Alternative m) => m t
@@ -24,5 +28,5 @@ literal :: (MonadState [t] m, Alternative m, Eq t) => t -> m t
 literal x = check (==x) item
 
 -- evaluate input with parser
-runParser :: Parser t a -> [t] -> Maybe (a, [t])
-runParser = runStateT
+runParser :: Parser e t a -> [t] -> Either e (Maybe (a, [t]))
+runParser p xs = runMaybeT $ runStateT p xs

@@ -1,12 +1,15 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module WoofAST where
 
 import Control.Applicative
+import Control.Monad.Trans.Maybe (MaybeT(..))
 import Control.Monad.State (MonadState(..), StateT(..))
 import Data.List (nub)
 import MTParser hiding (literal)
+import MonadError
 
 -- Woof BNF
 -- Woof := Form(+)
@@ -25,6 +28,23 @@ data AST = ASymbol String
          | AApp AST [AST]
          deriving (Show, Eq)
 
+-- Error messages
+eAppOper = "application: missing operator"
+eAppClose = "application: missing close parenthesis"
+eDefSym = "define: missing symbol"
+eDefForm = "define: missing form"
+eLamParam = "lambda: missing parameter list"
+eLamDupe = "lambda: duplicated parameter names"
+eLamPClose = "lambda: missing parameter close curly"
+eLamBody = "lambda: missing body"
+eSpecClose = "special form: missing close curly"
+eSpecial = "special form: unable to parse"
+eWoof = "woof: unparsed input"
+
+-- conditionally throw an error
+commit :: (MonadError m, Alternative m) => Error m -> m a -> m a
+commit e m = m <|> throwError e
+
 -- a type class that toggles
 class Switch f where
   switch :: f a -> f ()
@@ -32,6 +52,9 @@ class Switch f where
 instance Switch Maybe where
   switch (Just _) = Nothing
   switch Nothing = Just ()
+
+instance (Functor m) => Switch (MaybeT m) where
+  switch (MaybeT m) = MaybeT (fmap switch m)
 
 instance (Functor m, Switch m) => Switch (StateT s m) where
   switch (StateT f) = StateT g
@@ -63,24 +86,36 @@ symbol = tok $ some char
         alphabets = ['a'..'z'] ++ ['A'..'Z']
 
 -- syntatic parser
-application = openparen
-              *> pure AApp
-              <*> form
-              <*> many form
-              <* closeparen
-special = opencurly *> (define <|> lambda) <* closecurly
+
+application = do
+  openparen
+  op <- commit eAppOper form
+  args <- many form
+  commit eAppClose closeparen
+  return $ AApp op args
+
+special = opencurly
+          *> commit eSpecial (define <|> lambda)
+          <* commit eSpecClose closecurly
+
 define = check (=="define") symbol
          *> pure ADefine
-         <*> symbol
-         <*> form
-lambda = check (=="lambda") symbol
-         *> opencurly
-         *> pure ALambda
-         <*> check distinct (many symbol)
-         <*> (closecurly *> (some form))
+         <*> commit eDefSym symbol
+         <*> commit eDefForm form
+
+lambda = do
+  check (=="lambda") symbol
+  commit eLamParam opencurly
+  params <- many symbol
+  -- commit eLamDupe (check distinct params)
+  if distinct params then return () else throwError eLamDupe
+  commit eLamPClose closecurly
+  bodies <- commit eLamBody (some form)
+  return $ ALambda params bodies
+
 form = fmap ASymbol symbol <|> special <|> application
 
 endcheck = switch item
-woof = junk *> (many form) <* endcheck
+woof = junk *> (many form) <* commit eWoof endcheck
 
 distinct xs = length xs == length (nub xs)
